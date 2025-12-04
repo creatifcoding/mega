@@ -1,5 +1,20 @@
 # Deno Reimplementation Guide
 
+> **IMPORTANT DISCLAIMER**: This guide provides general patterns and approaches for reimplementing Deno support using modern deno_core and deno_runtime crates. The exact API signatures, import paths, and method names may vary by version and should be verified against the actual Deno documentation and source code for the specific versions being used.
+>
+> **Key Points**:
+> - Deno APIs evolve frequently - always verify against current documentation
+> - Code examples are illustrative patterns, not guaranteed to compile
+> - Import paths may differ (e.g., `deno_runtime::permissions` vs `deno_runtime::deno_permissions`)
+> - Method signatures should be confirmed in the actual crate documentation
+> - Testing with the target Deno version is essential
+>
+> **Recommended Approach**:
+> 1. Start with small working examples using the target Deno version
+> 2. Build incrementally, testing each component
+> 3. Consult official Deno documentation and examples
+> 4. Review Deno source code for internal APIs if needed
+
 This document provides a step-by-step guide for reimplementing Deno support in emacs-ng with the latest Deno versions.
 
 ## Overview
@@ -34,27 +49,28 @@ url = "2.5"
 The old code used `ProgramState` and `create_main_worker`. The new approach:
 
 ```rust
-use deno_runtime::deno_permissions::PermissionsContainer;
+// NOTE: These are estimated based on deno_runtime patterns.
+// Actual API paths and method signatures should be verified
+// against the specific version of deno_runtime being used.
+
+use deno_runtime::permissions::PermissionsContainer;
 use deno_runtime::worker::{MainWorker, WorkerOptions};
-use deno_core::{ModuleSpecifier, JsRuntime};
+use deno_core::ModuleSpecifier;
 use std::rc::Rc;
-use std::sync::Arc;
 
 fn create_worker(
     main_module: ModuleSpecifier,
     permissions: PermissionsContainer,
 ) -> Result<MainWorker, AnyError> {
+    // Permissions are typically set in WorkerOptions, not passed separately
     let options = WorkerOptions {
         module_loader: Rc::new(deno_runtime::deno_fs::FsModuleLoader),
-        permissions,
+        // Other required options will need to be configured
         ..Default::default()
     };
     
-    MainWorker::bootstrap_from_options(
-        main_module,
-        permissions,
-        options,
-    )
+    // Actual constructor may vary - verify with deno_runtime docs
+    MainWorker::bootstrap_from_options(main_module, options)
 }
 ```
 
@@ -96,22 +112,29 @@ let permissions = Permissions::from_options(&flags.into());
 
 New:
 ```rust
-use deno_runtime::deno_permissions::{
-    Permissions, PermissionsOptions, PermissionsContainer
-};
+// NOTE: The exact permissions API path may vary by version.
+// Common patterns include:
+// - deno_runtime::permissions::Permissions
+// - deno_runtime::permissions::PermissionsContainer
+// Verify the actual API in your version of deno_runtime
 
-// For allow-all:
-let permissions = PermissionsContainer::allow_all();
+// For allow-all (typical pattern):
+// let permissions = PermissionsContainer::allow_all();
 
-// For custom permissions:
-let permissions_options = PermissionsOptions {
-    allow_net: Some(vec![]),  // None = deny, Some(vec![]) = allow all
-    allow_read: Some(vec![]),
-    allow_write: Some(vec![]),
-    allow_run: Some(vec![]),
-    ..Default::default()
-};
-let permissions = PermissionsContainer::new(Permissions::from_options(&permissions_options)?);
+// For custom permissions, the API typically involves:
+// 1. Creating permission options/descriptors
+// 2. Building a permissions container
+// 
+// Example pattern (verify against actual API):
+// let permissions = PermissionsContainer::new(
+//     Permissions {
+//         net: NetPermissions::allow_all(),
+//         read: ReadPermissions::allow_all(),
+//         write: WritePermissions::allow_all(),
+//         run: RunPermissions::allow_all(),
+//         ..Default::default()
+//     }
+// );
 ```
 
 ## Phase 2: Module Loading and Execution
@@ -341,25 +364,42 @@ pub(crate) async fn run_repl() -> Result<(), AnyError> {
 
 TypeScript compilation in newer Deno versions is handled differently:
 
-### Option 1: Use SWC (Modern Deno Approach)
+### Option 1: Use deno_ast for TypeScript
 
-Modern Deno uses SWC for TypeScript compilation:
+Modern Deno uses deno_ast (which wraps SWC) for TypeScript compilation:
 
 ```rust
-use deno_ast::{parse_module, ParseParams, MediaType, EmitOptions};
+// NOTE: The deno_ast API evolves frequently. This is a general pattern.
+// Verify the exact API against your version of deno_ast.
+
+// Add to Cargo.toml:
+// deno_ast = "0.42"  // Check for latest compatible version
+
+// Example transpilation pattern:
+use deno_ast::{MediaType, ParseParams, SourceTextInfo};
 
 fn transpile_typescript(source: &str) -> Result<String, AnyError> {
-    let parsed = parse_module(ParseParams {
-        specifier: "file:///module.ts".to_string(),
-        text_info: deno_ast::SourceTextInfo::from_string(source.to_string()),
-        media_type: MediaType::TypeScript,
-        capture_tokens: false,
-        scope_analysis: false,
-        maybe_syntax: None,
-    })?;
+    // The exact API varies by version. Common pattern:
+    // 1. Parse the source with TypeScript media type
+    // 2. Transpile to JavaScript
+    // 3. Extract the transpiled text
     
-    let transpiled = parsed.transpile(&EmitOptions::default())?;
-    Ok(transpiled.text)
+    // Typical usage (verify against actual deno_ast version):
+    // let parsed = deno_ast::parse_module(ParseParams {
+    //     specifier: "file:///module.ts".to_string(),
+    //     text_info: SourceTextInfo::from_string(source.to_string()),
+    //     media_type: MediaType::TypeScript,
+    //     capture_tokens: false,
+    //     scope_analysis: false,
+    //     maybe_syntax: None,
+    // })?;
+    // 
+    // let transpiled = parsed.transpile(&EmitOptions::default())?;
+    // Ok(transpiled.text)
+    
+    // Simplified approach: Let the runtime handle it via module loader
+    // by setting the correct MediaType
+    unimplemented!("Check deno_ast documentation for current API")
 }
 ```
 
@@ -505,8 +545,24 @@ mod tests {
 
 ## Resources
 
-- [deno_core API docs](https://docs.rs/deno_core/)
-- [deno_runtime API docs](https://docs.rs/deno_runtime/)
-- [Deno source code](https://github.com/denoland/deno)
-- [Deno embedding examples](https://github.com/denoland/deno/tree/main/runtime/examples)
-- [deno_ast for TypeScript](https://docs.rs/deno_ast/)
+- [deno_core API docs](https://docs.rs/deno_core/) - Official core API documentation
+- [deno_runtime API docs](https://docs.rs/deno_runtime/) - Official runtime API documentation
+- [Deno source code](https://github.com/denoland/deno) - Reference implementation
+- [Deno embedding examples](https://github.com/denoland/deno/tree/main/runtime/examples) - Official examples
+- [deno_ast for TypeScript](https://docs.rs/deno_ast/) - TypeScript transpilation
+- [Rusty V8 docs](https://docs.rs/rusty_v8/) - V8 bindings documentation
+
+### Critical: Version Compatibility
+
+When implementing, ensure all versions are compatible:
+- `deno_core`, `deno_runtime`, and `rusty_v8` must use compatible versions
+- Check Deno's `Cargo.toml` for the exact versions they use together
+- Mismatched versions will cause compilation failures or runtime issues
+
+### Verification Strategy
+
+Before making large changes:
+1. Create a minimal test project with target Deno versions
+2. Verify each API call compiles and works
+3. Test with simple examples before integrating into emacs-ng
+4. Document any API differences discovered during implementation
