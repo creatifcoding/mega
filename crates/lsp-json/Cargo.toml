@@ -15,6 +15,7 @@ lisp-util.path = "../lisp-util"
 libc.workspace = true
 lsp-server = "0.7"
 serde_json = { version = "1.0", features = ["preserve_order"] }
+paste = "1.0"
 
 [build-dependencies]
 codegen = { path = "../codegen" }

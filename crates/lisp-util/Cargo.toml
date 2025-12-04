@@ -10,6 +10,7 @@ errno.workspace = true
 darling = "0.20"
 proc-macro2.workspace = true
 syn = { workspace = true, features = ["full"] }
+paste = "1.0"
 
 [lib]
 path = "lib.rs"

@@ -5519,6 +5519,7 @@ dependencies = [
  "lisp-macros",
  "lisp-util",
  "lsp-json",
+ "paste",
  "serde_json",
  "tokio",
  "url",
@@ -5832,6 +5833,7 @@ dependencies = [
  "libc",
  "lisp-macros",
  "lisp-util",
+ "paste",
 ]
 
 [[package]]
@@ -5865,6 +5867,7 @@ dependencies = [
  "darling",
  "errno",
  "libc",
+ "paste",
  "proc-macro2",
  "syn 2.0.111",
 ]
@@ -5936,6 +5939,7 @@ dependencies = [
  "lisp-macros",
  "lisp-util",
  "lsp-server",
+ "paste",
  "serde_json",
 ]
 

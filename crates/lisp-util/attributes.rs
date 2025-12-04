@@ -76,15 +76,23 @@ where
 }
 
 #[macro_export]
+// Use paste macro for identifier concatenation (replacement for removed concat_idents)
+use paste::paste;
+
+#[macro_export]
 macro_rules! export_lisp_fns {
     ($($(#[$($meta:meta),*])* $f:ident),+) => {
 	pub fn rust_init_syms() {
 	    #[allow(unused_unsafe)] // just in case the block is empty
 	    unsafe {
 		$(
-		    $(#[$($meta),*])* emacs_sys::bindings::defsubr(
-			concat_idents!(S, $f).as_ptr() as *mut emacs_sys::bindings::Aligned_Lisp_Subr
-		    );
+		    $(#[$($meta),*])* {
+		        paste::paste! {
+		            emacs_sys::bindings::defsubr(
+			        [<S $f>].as_ptr() as *mut emacs_sys::bindings::Aligned_Lisp_Subr
+		            )
+		        }
+		    };
 		)+
 	    }
 	}
