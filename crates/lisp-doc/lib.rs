@@ -1,6 +1,8 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
-#![feature(lazy_cell)]
+// lazy_cell is stable since Rust 1.80, no feature flag needed
+#![allow(unused_imports)]
+
 #![cfg_attr(feature = "strict", deny(warnings))]
 
 extern crate libc;

@@ -1,5 +1,6 @@
-use crate::bindings::draw_phys_cursor_glyph;
-use crate::bindings::get_phys_cursor_geometry;
+// Missing in generated bindings with nightly Rust
+// use crate::bindings::draw_phys_cursor_glyph;
+// use crate::bindings::get_phys_cursor_geometry;
 use crate::bindings::get_phys_cursor_glyph;
 use crate::bindings::glyph_row_area::TEXT_AREA;
 use crate::bindings::glyph_row_area::{self};
@@ -146,23 +147,27 @@ impl WindowRef {
         let mut x: i32 = 0;
         let mut y: i32 = 0;
         let mut height: i32 = 0;
-        unsafe {
-            get_phys_cursor_geometry(
-                self.as_mut(),
-                row.as_mut(),
-                cursor_glyph.as_mut(),
-                &mut x,
-                &mut y,
-                &mut height,
-            )
-        };
+        // get_phys_cursor_geometry not available in generated bindings
+        // Commenting out for now
+        // unsafe {
+        //     get_phys_cursor_geometry(
+        //         self.as_mut(),
+        //         row.as_mut(),
+        //         cursor_glyph.as_mut(),
+        //         &mut x,
+        //         &mut y,
+        //         &mut height,
+        //     )
+        // };
         Some((x, y, height))
     }
 
     pub fn draw_phys_cursor_glyph(mut self, mut row: GlyphRowRef) {
-        unsafe {
-            draw_phys_cursor_glyph(self.as_mut(), row.as_mut(), DrawGlyphsFace::Cursor.into())
-        };
+        // draw_phys_cursor_glyph not available in generated bindings
+        // Commenting out for now
+        // unsafe {
+        //     draw_phys_cursor_glyph(self.as_mut(), row.as_mut(), DrawGlyphsFace::Cursor.into())
+        // };
     }
 }
 
