@@ -14,8 +14,9 @@ lisp-util.path = "../lisp-util"
 lsp-json.path = "../lsp-json"
 libc.workspace = true
 futures = "0.3"
-# Latest Deno dependencies that work with stable Rust
-deno_core = "0.371"
+# Deno dependencies - using compatible crates.io versions
+# deno_runtime 0.229 requires deno_core 0.363
+deno_core = "0.363"
 deno_runtime = "0.229"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 tokio = { workspace = true, features = ["full"] }
