@@ -51,6 +51,8 @@ struct EmacsMainJsRuntime {
     /// isolate. Used to execute javascript and interface
     /// with the deno runtime.
     deno_worker: Option<deno_runtime::worker::MainWorker>,
+    /// Custom module loader for caching dynamically injected modules
+    module_loader: Option<std::rc::Rc<EmacsCachedModuleLoader>>,
     /// If we are within the current tokio runtime. If we
     /// are within the runtime, we cannot call worker.execute
     /// or worker.execute_module due to a Deno bug. This means
@@ -116,6 +118,7 @@ impl Default for EmacsMainJsRuntime {
         Self {
             tokio_runtime: None,
             deno_worker: None,
+            module_loader: None,
             within_runtime: false,
             module_counter: 0,
             stacked_v8_handle: None,
@@ -142,6 +145,82 @@ impl Default for EmacsJsOptions {
             no_remote: false,
             loops_per_tick: 1000,
         }
+    }
+}
+
+/// Custom ModuleLoader for Deno 0.371+ that replaces old file_fetcher.insert_cached
+/// functionality. Allows dynamic injection of JS/TS modules into the runtime.
+struct EmacsCachedModuleLoader {
+    cache: RefCell<std::collections::HashMap<String, (String, deno_ast::MediaType)>>,
+    fs_loader: deno_runtime::deno_fs::FsModuleLoader,
+}
+
+impl EmacsCachedModuleLoader {
+    fn new() -> Self {
+        Self {
+            cache: RefCell::new(std::collections::HashMap::new()),
+            fs_loader: deno_runtime::deno_fs::FsModuleLoader,
+        }
+    }
+
+    /// Insert a module into the cache for later retrieval
+    fn insert_cached(&self, specifier: String, source: String, is_typescript: bool) {
+        let media_type = if is_typescript {
+            deno_ast::MediaType::TypeScript
+        } else {
+            deno_ast::MediaType::JavaScript
+        };
+        self.cache.borrow_mut().insert(specifier, (source, media_type));
+    }
+}
+
+impl deno_core::ModuleLoader for EmacsCachedModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: deno_core::ResolutionKind,
+    ) -> Result<deno_core::ModuleSpecifier, deno_core::error::AnyError> {
+        // Try standard resolution first
+        deno_core::resolve_import(specifier, referrer).map_err(|e| e.into())
+    }
+
+    fn load(
+        &self,
+        module_specifier: &deno_core::ModuleSpecifier,
+        _maybe_referrer: Option<&deno_core::ModuleSpecifier>,
+        _is_dyn_import: bool,
+    ) -> Pin<Box<deno_core::ModuleSourceFuture>> {
+        let specifier_str = module_specifier.to_string();
+        
+        // Check cache first
+        if let Some((source, media_type)) = self.cache.borrow().get(&specifier_str) {
+            let source = source.clone();
+            let media_type = *media_type;
+            let module_type = match media_type {
+                deno_ast::MediaType::JavaScript | deno_ast::MediaType::Mjs => {
+                    deno_core::ModuleType::JavaScript
+                }
+                deno_ast::MediaType::TypeScript 
+                | deno_ast::MediaType::Mts 
+                | deno_ast::MediaType::Tsx => {
+                    // TypeScript needs transpilation
+                    deno_core::ModuleType::JavaScript
+                }
+                _ => deno_core::ModuleType::JavaScript,
+            };
+
+            return Box::pin(async move {
+                Ok(deno_core::ModuleSource::new(
+                    module_type,
+                    source.into(),
+                    module_specifier,
+                ))
+            });
+        }
+
+        // Fall back to filesystem loader
+        self.fs_loader.load(module_specifier, _maybe_referrer, _is_dyn_import)
     }
 }
 
@@ -345,6 +424,14 @@ impl EmacsMainJsRuntime {
 
     fn set_deno_worker(worker: deno_runtime::worker::MainWorker) {
         Self::access(move |main| main.deno_worker = Some(worker));
+    }
+
+    fn get_module_loader() -> Option<std::rc::Rc<EmacsCachedModuleLoader>> {
+        Self::access(|main| main.module_loader.clone())
+    }
+
+    fn set_module_loader(loader: std::rc::Rc<EmacsCachedModuleLoader>) {
+        Self::access(move |main| main.module_loader = Some(loader));
     }
 
     fn is_main_worker_active() -> bool {
@@ -1761,12 +1848,17 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
     // NEW CODE for Deno 0.371:
     use deno_runtime::worker::WorkerOptions;
     use deno_core::ModuleSpecifier;
+    use std::rc::Rc;
+    
+    // Create our custom module loader with caching support
+    let module_loader = Rc::new(EmacsCachedModuleLoader::new());
     
     let options = WorkerOptions {
         bootstrap: deno_runtime::BootstrapOptions {
             inspect: inspect_brk.is_some() || inspect.is_some(),
             ..Default::default()
         },
+        module_loader: module_loader.clone(),
         ..Default::default()
     };
     
@@ -1783,6 +1875,7 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
 
     let worker = result?;
     EmacsMainJsRuntime::set_deno_worker(worker);
+    EmacsMainJsRuntime::set_module_loader(module_loader);
     Ok(())
 }
 
@@ -1800,28 +1893,16 @@ fn run_module_inner(
         let main_module = deno_core::resolve_url_or_path(filepath)?;
 
         if let Some(js) = additional_js {
-            // NOTE: Deno 0.371 - file_fetcher.insert_cached() no longer exists
-            // TODO: Implement custom ModuleLoader for this functionality
-            /* OLD CODE:
-            let program = EmacsMainJsRuntime::get_program_state();
-            // We are inserting a fake file into the file cache in order to execute
-            // our module.
-            let file = deno::file_fetcher::File {
-                local: main_module.clone().to_file_path().unwrap(),
-                maybe_types: None,
-                media_type: if as_typescript {
-                    deno::media_type::MediaType::TypeScript
-                } else {
-                    deno::media_type::MediaType::JavaScript
-                },
-                source: js,
-                specifier: main_module.clone(),
-            };
-
-            program.file_fetcher.insert_cached(file);
-            */
-            // For now, this functionality is disabled pending ModuleLoader implementation
-            return Err(anyhow::anyhow!("Dynamic module injection not yet implemented in Deno 0.371"));
+            // NOTE: Deno 0.371 - Use custom ModuleLoader for dynamic module injection
+            // Insert the code into our cached module loader
+            let loader = EmacsMainJsRuntime::get_module_loader()
+                .ok_or_else(|| anyhow::anyhow!("Module loader not initialized"))?;
+            
+            loader.insert_cached(
+                main_module.to_string(),
+                js,
+                as_typescript,
+            );
         }
 
         w.execute_module(&main_module).await?;
