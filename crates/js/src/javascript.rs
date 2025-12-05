@@ -100,7 +100,8 @@ struct EmacsMainJsRuntime {
     /// The deno program state for our worker. Usually not touched,
     /// it may be sometimes references to refer to certain variables
     /// not stored in EmacsJsOptions.
-    program_state: Option<Arc<deno::program_state::ProgramState>>,
+    /// NOTE: ProgramState removed in Deno 0.371 - replaced with WorkerOptions
+    /// program_state: Option<Arc<deno::program_state::ProgramState>>,
     /// If the program is within a toplevel module evaluation. If we are
     /// within a toplevel module evaluation and have an unhandled promise exception
     /// the deno runtime will be posioned, and we will need to re-initialize JS
@@ -120,7 +121,7 @@ impl Default for EmacsMainJsRuntime {
             stacked_v8_handle: None,
             options: EmacsJsOptions::default(),
             proxy_template: None,
-            program_state: None,
+            // program_state: None, // Removed in Deno 0.371
             within_toplevel: false,
             tick_scheduled: false,
         }
@@ -216,13 +217,14 @@ impl EmacsMainJsRuntime {
         unsafe { input.assume_init() }
     }
 
-    fn set_program_state(program: Arc<deno::program_state::ProgramState>) {
-        Self::access(move |main| main.program_state = Some(program));
-    }
+    // NOTE: ProgramState removed in Deno 0.371 - no longer needed
+    // fn set_program_state(program: Arc<deno::program_state::ProgramState>) {
+    //     Self::access(move |main| main.program_state = Some(program));
+    // }
 
-    fn get_program_state() -> Arc<deno::program_state::ProgramState> {
-        Self::access(|main| main.program_state.as_ref().unwrap().clone())
-    }
+    // fn get_program_state() -> Arc<deno::program_state::ProgramState> {
+    //     Self::access(|main| main.program_state.as_ref().unwrap().clone())
+    // }
 
     fn set_proxy_template(global: v8::Global<v8::ObjectTemplate>) {
         Self::access(move |main| main.proxy_template = Some(global));
@@ -1737,6 +1739,9 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
         std::env::set_var("NO_COLOR", "1");
     }
 
+    // NOTE: Deno 0.371 - Flags and ProgramState removed, using WorkerOptions instead
+    // TODO: Migrate this to new Deno API - for now using simplified initialization
+    /* OLD CODE with deno::flags::Flags:
     let flags = deno::flags::Flags {
         unstable: true, // Needed for deno in WebWorkers
         no_check: js_options.no_check,
@@ -1751,6 +1756,26 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
     let program = program_fut?;
     EmacsMainJsRuntime::set_program_state(program.clone());
     let mut worker = deno::create_main_worker(&program, main_module.clone(), permissions);
+    */
+    
+    // NEW CODE for Deno 0.371:
+    use deno_runtime::worker::WorkerOptions;
+    use deno_core::ModuleSpecifier;
+    
+    let options = WorkerOptions {
+        bootstrap: deno_runtime::BootstrapOptions {
+            inspect: inspect_brk.is_some() || inspect.is_some(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    
+    let mut worker = deno_runtime::worker::MainWorker::bootstrap_from_options(
+        main_module.clone(),
+        permissions,
+        options,
+    );
+    
     let result: EmacsJsResult<deno_runtime::worker::MainWorker> = runtime.block_on(async move {
         v8_bind_lisp_funcs(&mut worker)?;
         Ok(worker)
@@ -1775,6 +1800,9 @@ fn run_module_inner(
         let main_module = deno_core::resolve_url_or_path(filepath)?;
 
         if let Some(js) = additional_js {
+            // NOTE: Deno 0.371 - file_fetcher.insert_cached() no longer exists
+            // TODO: Implement custom ModuleLoader for this functionality
+            /* OLD CODE:
             let program = EmacsMainJsRuntime::get_program_state();
             // We are inserting a fake file into the file cache in order to execute
             // our module.
@@ -1791,6 +1819,9 @@ fn run_module_inner(
             };
 
             program.file_fetcher.insert_cached(file);
+            */
+            // For now, this functionality is disabled pending ModuleLoader implementation
+            return Err(anyhow::anyhow!("Dynamic module injection not yet implemented in Deno 0.371"));
         }
 
         w.execute_module(&main_module).await?;
@@ -1960,6 +1991,10 @@ pub fn js_tick_event_loop(handler: LispObject) -> LispObject {
     emacs_sys::globals::Qnil
 }
 
+// NOTE: Deno 0.371 - Subcommands need complete rewrite for new API
+// Temporarily disabled pending reimplementation
+// TODO: Reimplement using deno_runtime 0.229 APIs
+/*
 // We overwrite certain subcommands to allow interfacing with emacs-lisp
 // All other subcommands will use deno's default implementation
 fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = EmacsJsResult<()>>>> {
@@ -2026,8 +2061,12 @@ fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = Emac
         _ => deno::get_subcommand(flags),
     }
 }
+*/
 
 /// Usage: (deno CMD &REST ARGS)
+///
+/// NOTE: Deno 0.371 - This function temporarily disabled pending API migration
+/// TODO: Reimplement using new deno_runtime 0.229 subcommand APIs
 ///
 /// Invokes a deno command using emacs-ng. This behavior mirrors as if you
 /// ran a deno command from the command line, except that lisp
@@ -2068,6 +2107,7 @@ fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = Emac
 ///
 #[lisp_fn(min = "1")]
 pub fn deno(cmd_args: &[LispObject]) {
+    /* TEMPORARILY DISABLED - Deno 0.371 API migration in progress
     let mut args = vec!["deno".to_string()];
     for i in 0..cmd_args.len() {
         let stringref: LispStringRef = cmd_args[i].into();
@@ -2086,6 +2126,8 @@ pub fn deno(cmd_args: &[LispObject]) {
     block_on(async move { fut.await }).unwrap_or_else(|e| {
         error!("Error in deno command '{}': {}", args.join(" "), e);
     });
+    */
+    error!("(deno) command temporarily disabled during Deno 0.371 API migration. Use (eval-js) and (eval-ts) for JavaScript/TypeScript execution.");
 }
 
 // Do NOT call this function, it is just used for macro purposes to
