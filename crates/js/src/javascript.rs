@@ -2125,7 +2125,4 @@ fn init_syms() {
     def_lisp_sym!(Qjs_proxy, "js-proxy");
 }
 
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/out/javascript_exports.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/javascript_exports.rs"));
