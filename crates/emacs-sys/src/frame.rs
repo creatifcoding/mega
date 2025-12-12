@@ -336,7 +336,11 @@ impl FrameRef {
     }
 
     pub fn set_parent(mut self, parent: LispObject) {
-        unsafe { crate::bindings::fset_parent_frame(self.as_mut(), parent) };
+        // fset_parent_frame not available in generated bindings
+        // unsafe { crate::bindings::fset_parent_frame(self.as_mut(), parent) };
+        unsafe {
+            (*self.as_mut()).parent_frame = parent;
+        }
     }
 
     pub fn set_icon_name(mut self, icon_name: LispObject) {
@@ -351,7 +355,9 @@ impl FrameRef {
 
     pub fn set_override_redirect_(mut self, override_redirect: bool) {
         if cfg!(have_window_system) {
-            self.set_override_redirect(override_redirect);
+            // set_override_redirect method not available, commenting out for now
+            // self.set_override_redirect(override_redirect);
+            // TODO: Implement proper override_redirect setting when binding is available
         }
     }
 

@@ -1,4 +1,6 @@
-#![feature(lazy_cell)]
+// lazy_cell is stable since Rust 1.80, no feature flag needed
+#![allow(unused_imports)]
+
 
 mod data;
 mod error;

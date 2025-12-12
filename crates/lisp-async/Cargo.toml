@@ -15,6 +15,7 @@ lisp-util.path = "../lisp-util"
 libc.workspace = true
 crossbeam = "0.8"
 futures = "0.3"
+paste = "1.0"
 
 [build-dependencies]
 codegen = { path = "../codegen" }

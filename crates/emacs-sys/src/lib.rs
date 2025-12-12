@@ -9,7 +9,8 @@
 // we have a bunch of unused code during testing at the moment, somehow
 #![cfg_attr(test, allow(unused))]
 #![cfg_attr(feature = "strict", deny(warnings))]
-#![feature(concat_idents)]
+// concat_idents feature has been removed in newer Rust
+// #![feature(concat_idents)]
 #![feature(never_type)]
 #![feature(stmt_expr_attributes)]
 #![feature(async_closure)]

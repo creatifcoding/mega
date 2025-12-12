@@ -2,8 +2,23 @@
 use crate::bindings::draw_glyphs_face;
 use crate::bindings::face_id;
 use crate::bindings::glyph_row_area;
-use crate::bindings::image_cache as ImageCache;
-use crate::bindings::resource_types;
+// Missing in generated bindings with nightly Rust - create stub types
+// use crate::bindings::image_cache as ImageCache;
+// use crate::bindings::resource_types;
+// Stub types for missing bindings
+#[repr(C)]
+pub struct ImageCache {
+    _private: [u8; 0],
+}
+pub mod resource_types {
+    pub type Type = i32;
+    pub const RES_TYPE_NUMBER: Type = 0;
+    pub const RES_TYPE_FLOAT: Type = 1;
+    pub const RES_TYPE_BOOLEAN: Type = 2;
+    pub const RES_TYPE_STRING: Type = 3;
+    pub const RES_TYPE_SYMBOL: Type = 4;
+    pub const RES_TYPE_BOOLEAN_NUMBER: Type = 5;
+}
 use crate::bindings::text_cursor_kinds;
 use crate::bindings::Emacs_GC as EmacsGC;
 

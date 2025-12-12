@@ -51,6 +51,8 @@ struct EmacsMainJsRuntime {
     /// isolate. Used to execute javascript and interface
     /// with the deno runtime.
     deno_worker: Option<deno_runtime::worker::MainWorker>,
+    /// Custom module loader for caching dynamically injected modules
+    module_loader: Option<std::rc::Rc<EmacsCachedModuleLoader>>,
     /// If we are within the current tokio runtime. If we
     /// are within the runtime, we cannot call worker.execute
     /// or worker.execute_module due to a Deno bug. This means
@@ -100,7 +102,8 @@ struct EmacsMainJsRuntime {
     /// The deno program state for our worker. Usually not touched,
     /// it may be sometimes references to refer to certain variables
     /// not stored in EmacsJsOptions.
-    program_state: Option<Arc<deno::program_state::ProgramState>>,
+    /// NOTE: ProgramState removed in Deno 0.371 - replaced with WorkerOptions
+    /// program_state: Option<Arc<deno::program_state::ProgramState>>,
     /// If the program is within a toplevel module evaluation. If we are
     /// within a toplevel module evaluation and have an unhandled promise exception
     /// the deno runtime will be posioned, and we will need to re-initialize JS
@@ -115,12 +118,13 @@ impl Default for EmacsMainJsRuntime {
         Self {
             tokio_runtime: None,
             deno_worker: None,
+            module_loader: None,
             within_runtime: false,
             module_counter: 0,
             stacked_v8_handle: None,
             options: EmacsJsOptions::default(),
             proxy_template: None,
-            program_state: None,
+            // program_state: None, // Removed in Deno 0.371
             within_toplevel: false,
             tick_scheduled: false,
         }
@@ -141,6 +145,82 @@ impl Default for EmacsJsOptions {
             no_remote: false,
             loops_per_tick: 1000,
         }
+    }
+}
+
+/// Custom ModuleLoader for Deno 0.371+ that replaces old file_fetcher.insert_cached
+/// functionality. Allows dynamic injection of JS/TS modules into the runtime.
+struct EmacsCachedModuleLoader {
+    cache: RefCell<std::collections::HashMap<String, (String, deno_ast::MediaType)>>,
+    fs_loader: deno_runtime::deno_fs::FsModuleLoader,
+}
+
+impl EmacsCachedModuleLoader {
+    fn new() -> Self {
+        Self {
+            cache: RefCell::new(std::collections::HashMap::new()),
+            fs_loader: deno_runtime::deno_fs::FsModuleLoader,
+        }
+    }
+
+    /// Insert a module into the cache for later retrieval
+    fn insert_cached(&self, specifier: String, source: String, is_typescript: bool) {
+        let media_type = if is_typescript {
+            deno_ast::MediaType::TypeScript
+        } else {
+            deno_ast::MediaType::JavaScript
+        };
+        self.cache.borrow_mut().insert(specifier, (source, media_type));
+    }
+}
+
+impl deno_core::ModuleLoader for EmacsCachedModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: deno_core::ResolutionKind,
+    ) -> Result<deno_core::ModuleSpecifier, deno_core::error::AnyError> {
+        // Try standard resolution first
+        deno_core::resolve_import(specifier, referrer).map_err(|e| e.into())
+    }
+
+    fn load(
+        &self,
+        module_specifier: &deno_core::ModuleSpecifier,
+        _maybe_referrer: Option<&deno_core::ModuleSpecifier>,
+        _is_dyn_import: bool,
+    ) -> Pin<Box<deno_core::ModuleSourceFuture>> {
+        let specifier_str = module_specifier.to_string();
+        
+        // Check cache first
+        if let Some((source, media_type)) = self.cache.borrow().get(&specifier_str) {
+            let source = source.clone();
+            let media_type = *media_type;
+            let module_type = match media_type {
+                deno_ast::MediaType::JavaScript | deno_ast::MediaType::Mjs => {
+                    deno_core::ModuleType::JavaScript
+                }
+                deno_ast::MediaType::TypeScript 
+                | deno_ast::MediaType::Mts 
+                | deno_ast::MediaType::Tsx => {
+                    // TypeScript needs transpilation
+                    deno_core::ModuleType::JavaScript
+                }
+                _ => deno_core::ModuleType::JavaScript,
+            };
+
+            return Box::pin(async move {
+                Ok(deno_core::ModuleSource::new(
+                    module_type,
+                    source.into(),
+                    module_specifier,
+                ))
+            });
+        }
+
+        // Fall back to filesystem loader
+        self.fs_loader.load(module_specifier, _maybe_referrer, _is_dyn_import)
     }
 }
 
@@ -216,13 +296,14 @@ impl EmacsMainJsRuntime {
         unsafe { input.assume_init() }
     }
 
-    fn set_program_state(program: Arc<deno::program_state::ProgramState>) {
-        Self::access(move |main| main.program_state = Some(program));
-    }
+    // NOTE: ProgramState removed in Deno 0.371 - no longer needed
+    // fn set_program_state(program: Arc<deno::program_state::ProgramState>) {
+    //     Self::access(move |main| main.program_state = Some(program));
+    // }
 
-    fn get_program_state() -> Arc<deno::program_state::ProgramState> {
-        Self::access(|main| main.program_state.as_ref().unwrap().clone())
-    }
+    // fn get_program_state() -> Arc<deno::program_state::ProgramState> {
+    //     Self::access(|main| main.program_state.as_ref().unwrap().clone())
+    // }
 
     fn set_proxy_template(global: v8::Global<v8::ObjectTemplate>) {
         Self::access(move |main| main.proxy_template = Some(global));
@@ -343,6 +424,14 @@ impl EmacsMainJsRuntime {
 
     fn set_deno_worker(worker: deno_runtime::worker::MainWorker) {
         Self::access(move |main| main.deno_worker = Some(worker));
+    }
+
+    fn get_module_loader() -> Option<std::rc::Rc<EmacsCachedModuleLoader>> {
+        Self::access(|main| main.module_loader.clone())
+    }
+
+    fn set_module_loader(loader: std::rc::Rc<EmacsCachedModuleLoader>) {
+        Self::access(move |main| main.module_loader = Some(loader));
     }
 
     fn is_main_worker_active() -> bool {
@@ -1737,6 +1826,9 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
         std::env::set_var("NO_COLOR", "1");
     }
 
+    // NOTE: Deno 0.371 - Flags and ProgramState removed, using WorkerOptions instead
+    // TODO: Migrate this to new Deno API - for now using simplified initialization
+    /* OLD CODE with deno::flags::Flags:
     let flags = deno::flags::Flags {
         unstable: true, // Needed for deno in WebWorkers
         no_check: js_options.no_check,
@@ -1751,6 +1843,31 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
     let program = program_fut?;
     EmacsMainJsRuntime::set_program_state(program.clone());
     let mut worker = deno::create_main_worker(&program, main_module.clone(), permissions);
+    */
+    
+    // NEW CODE for Deno 0.371:
+    use deno_runtime::worker::WorkerOptions;
+    use deno_core::ModuleSpecifier;
+    use std::rc::Rc;
+    
+    // Create our custom module loader with caching support
+    let module_loader = Rc::new(EmacsCachedModuleLoader::new());
+    
+    let options = WorkerOptions {
+        bootstrap: deno_runtime::BootstrapOptions {
+            inspect: inspect_brk.is_some() || inspect.is_some(),
+            ..Default::default()
+        },
+        module_loader: module_loader.clone(),
+        ..Default::default()
+    };
+    
+    let mut worker = deno_runtime::worker::MainWorker::bootstrap_from_options(
+        main_module.clone(),
+        permissions,
+        options,
+    );
+    
     let result: EmacsJsResult<deno_runtime::worker::MainWorker> = runtime.block_on(async move {
         v8_bind_lisp_funcs(&mut worker)?;
         Ok(worker)
@@ -1758,6 +1875,7 @@ fn init_worker(filepath: &str, js_options: &EmacsJsOptions) -> EmacsJsResult<()>
 
     let worker = result?;
     EmacsMainJsRuntime::set_deno_worker(worker);
+    EmacsMainJsRuntime::set_module_loader(module_loader);
     Ok(())
 }
 
@@ -1775,22 +1893,16 @@ fn run_module_inner(
         let main_module = deno_core::resolve_url_or_path(filepath)?;
 
         if let Some(js) = additional_js {
-            let program = EmacsMainJsRuntime::get_program_state();
-            // We are inserting a fake file into the file cache in order to execute
-            // our module.
-            let file = deno::file_fetcher::File {
-                local: main_module.clone().to_file_path().unwrap(),
-                maybe_types: None,
-                media_type: if as_typescript {
-                    deno::media_type::MediaType::TypeScript
-                } else {
-                    deno::media_type::MediaType::JavaScript
-                },
-                source: js,
-                specifier: main_module.clone(),
-            };
-
-            program.file_fetcher.insert_cached(file);
+            // NOTE: Deno 0.371 - Use custom ModuleLoader for dynamic module injection
+            // Insert the code into our cached module loader
+            let loader = EmacsMainJsRuntime::get_module_loader()
+                .ok_or_else(|| anyhow::anyhow!("Module loader not initialized"))?;
+            
+            loader.insert_cached(
+                main_module.to_string(),
+                js,
+                as_typescript,
+            );
         }
 
         w.execute_module(&main_module).await?;
@@ -1960,6 +2072,10 @@ pub fn js_tick_event_loop(handler: LispObject) -> LispObject {
     emacs_sys::globals::Qnil
 }
 
+// NOTE: Deno 0.371 - Subcommands need complete rewrite for new API
+// Temporarily disabled pending reimplementation
+// TODO: Reimplement using deno_runtime 0.229 APIs
+/*
 // We overwrite certain subcommands to allow interfacing with emacs-lisp
 // All other subcommands will use deno's default implementation
 fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = EmacsJsResult<()>>>> {
@@ -2026,8 +2142,12 @@ fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = Emac
         _ => deno::get_subcommand(flags),
     }
 }
+*/
 
 /// Usage: (deno CMD &REST ARGS)
+///
+/// NOTE: Deno 0.371 - This function temporarily disabled pending API migration
+/// TODO: Reimplement using new deno_runtime 0.229 subcommand APIs
 ///
 /// Invokes a deno command using emacs-ng. This behavior mirrors as if you
 /// ran a deno command from the command line, except that lisp
@@ -2068,6 +2188,7 @@ fn get_subcommand(flags: deno::flags::Flags) -> Pin<Box<dyn Future<Output = Emac
 ///
 #[lisp_fn(min = "1")]
 pub fn deno(cmd_args: &[LispObject]) {
+    /* TEMPORARILY DISABLED - Deno 0.371 API migration in progress
     let mut args = vec!["deno".to_string()];
     for i in 0..cmd_args.len() {
         let stringref: LispStringRef = cmd_args[i].into();
@@ -2086,6 +2207,8 @@ pub fn deno(cmd_args: &[LispObject]) {
     block_on(async move { fut.await }).unwrap_or_else(|e| {
         error!("Error in deno command '{}': {}", args.join(" "), e);
     });
+    */
+    error!("(deno) command temporarily disabled during Deno 0.371 API migration. Use (eval-js) and (eval-ts) for JavaScript/TypeScript execution.");
 }
 
 // Do NOT call this function, it is just used for macro purposes to
@@ -2125,7 +2248,4 @@ fn init_syms() {
     def_lisp_sym!(Qjs_proxy, "js-proxy");
 }
 
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/out/javascript_exports.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/javascript_exports.rs"));
